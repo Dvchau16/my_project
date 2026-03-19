@@ -3,6 +3,7 @@ import requests
 import uuid
 import os
 import json
+import time
 from datetime import datetime
 
 # Set page config
@@ -83,6 +84,81 @@ def send_message(messages):
         
         response.raise_for_status()
         return response.json()
+    
+    except requests.exceptions.ConnectionError:
+        st.error("Network error: Unable to connect to Hugging Face API")
+        return None
+    except requests.exceptions.Timeout:
+        st.error("Request timeout: Hugging Face API took too long to respond")
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error communicating with API: {str(e)}")
+        return None
+
+
+def send_message_stream(messages, placeholder):
+    """Send messages to the Hugging Face API with streaming"""
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "messages": messages,
+        "stream": True
+    }
+    
+    try:
+        response = requests.post(
+            "https://router.huggingface.co/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            stream=True,
+            timeout=30
+        )
+        
+        # Handle specific error codes
+        if response.status_code == 401:
+            st.error("Invalid HF_TOKEN. Please check your token in .streamlit/secrets.toml")
+            return None
+        elif response.status_code == 429:
+            st.error("Rate limit exceeded. Please try again later.")
+            return None
+        
+        response.raise_for_status()
+        
+        # Stream the response
+        full_message = ""
+        for line in response.iter_lines():
+            if line:
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                
+                # Parse SSE format
+                if line.startswith("data: "):
+                    data_str = line[6:]  # Remove "data: " prefix
+                    
+                    # Skip [DONE] message
+                    if data_str == "[DONE]":
+                        break
+                    
+                    try:
+                        chunk = json.loads(data_str)
+                        
+                        # Extract token from chunk
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            delta = chunk["choices"][0].get("delta", {})
+                            token = delta.get("content", "")
+                            
+                            if token:
+                                full_message += token
+                                # Update placeholder with streamed content
+                                placeholder.write(full_message)
+                                time.sleep(0.02)
+                    except json.JSONDecodeError:
+                        pass
+        
+        return full_message if full_message else None
     
     except requests.exceptions.ConnectionError:
         st.error("Network error: Unable to connect to Hugging Face API")
@@ -183,19 +259,17 @@ else:
         with st.chat_message("user"):
             st.write(user_input)
         
-        # Send full message history to API
-        response = send_message(current_chat["messages"])
-        
-        if response:
-            # Extract assistant's response
-            assistant_message = response["choices"][0]["message"]["content"]
+        # Display assistant message with streaming
+        with st.chat_message("assistant"):
+            # Create empty placeholder for streaming
+            response_placeholder = st.empty()
             
-            # Add assistant message to current chat
-            current_chat["messages"].append({"role": "assistant", "content": assistant_message})
+            # Send full message history to API with streaming
+            assistant_message = send_message_stream(current_chat["messages"], response_placeholder)
             
-            # Save chat to file
-            save_chat_to_file(current_chat)
-            
-            # Display assistant message
-            with st.chat_message("assistant"):
-                st.write(assistant_message)
+            if assistant_message:
+                # Add assistant message to current chat
+                current_chat["messages"].append({"role": "assistant", "content": assistant_message})
+                
+                # Save chat to file
+                save_chat_to_file(current_chat)

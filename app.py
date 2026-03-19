@@ -6,9 +6,6 @@ import json
 import time
 from datetime import datetime
 
-# Debug section - Display available secrets
-st.write("Debug - Available Secrets:", list(st.secrets.keys()))
-
 # Set page config
 st.set_page_config(page_title="My AI Chat", layout="wide")
 

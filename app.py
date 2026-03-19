@@ -54,6 +54,72 @@ def delete_chat_file(chat_id):
         os.remove(filepath)
 
 
+def load_memory():
+    """Load user memory from memory.json"""
+    if os.path.exists("memory.json"):
+        try:
+            with open("memory.json", "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def save_memory(memory):
+    """Save user memory to memory.json"""
+    with open("memory.json", "w") as f:
+        json.dump(memory, f, indent=2)
+
+
+def extract_traits(user_message, assistant_response):
+    """Extract personal facts/preferences from user message and save to memory"""
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": "application/json"
+    }
+    
+    extraction_prompt = f"""Extract any personal facts, preferences, or traits about the user from this conversation.
+User said: "{user_message}"
+
+Return ONLY a valid JSON object (no markdown, no extra text) with key-value pairs of traits. 
+If no personal info, return empty object {{}}.
+Examples of what to extract: name, age, location, job, hobby, preference, likes/dislikes, personality traits, etc.
+
+Example valid outputs:
+{{"name": "John", "location": "New York", "likes_coffee": true}}
+{{"hobby": "photography", "experience_level": "beginner"}}
+{{}}"""
+    
+    payload = {
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "messages": [{"role": "user", "content": extraction_prompt}]
+    }
+    
+    try:
+        response = requests.post(
+            "https://router.huggingface.co/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if "choices" in data and len(data["choices"]) > 0:
+                response_text = data["choices"][0]["message"]["content"].strip()
+                
+                # Try to parse the JSON response
+                try:
+                    traits = json.loads(response_text)
+                    if isinstance(traits, dict):
+                        return traits
+                except json.JSONDecodeError:
+                    pass
+        return {}
+    except:
+        return {}
+
+
 def send_message(messages):
     """Send messages to the Hugging Face API"""
     headers = {
@@ -96,16 +162,23 @@ def send_message(messages):
         return None
 
 
-def send_message_stream(messages, placeholder):
+def send_message_stream(messages, placeholder, memory=None):
     """Send messages to the Hugging Face API with streaming"""
     headers = {
         "Authorization": f"Bearer {hf_token}",
         "Content-Type": "application/json"
     }
     
+    # Inject memory into system prompt
+    messages_with_memory = messages.copy()
+    if memory and any(memory.values()):
+        memory_str = ", ".join([f"{k}: {v}" for k, v in memory.items()])
+        system_prompt = f"You are a helpful assistant. Remember these facts about the user: {memory_str}"
+        messages_with_memory = [{"role": "system", "content": system_prompt}] + messages_with_memory
+    
     payload = {
         "model": "meta-llama/Llama-3.2-1B-Instruct",
-        "messages": messages,
+        "messages": messages_with_memory,
         "stream": True
     }
     
@@ -229,6 +302,20 @@ with st.sidebar:
                     else:
                         st.session_state.current_chat_id = None
                 st.rerun()
+    
+    st.divider()
+    
+    # User Memory section
+    with st.expander("👤 User Memory"):
+        memory = load_memory()
+        if memory:
+            st.json(memory)
+        else:
+            st.info("No memory stored yet.")
+        
+        if st.button("🗑️ Clear Memory", use_container_width=True):
+            save_memory({})
+            st.rerun()
 
 # Main chat area
 if st.session_state.current_chat_id is None:
@@ -245,6 +332,9 @@ else:
     user_input = st.chat_input("Type your message here...")
     
     if user_input:
+        # Load user memory
+        user_memory = load_memory()
+        
         # Add user message to current chat
         current_chat["messages"].append({"role": "user", "content": user_input})
         
@@ -264,8 +354,8 @@ else:
             # Create empty placeholder for streaming
             response_placeholder = st.empty()
             
-            # Send full message history to API with streaming
-            assistant_message = send_message_stream(current_chat["messages"], response_placeholder)
+            # Send full message history to API with streaming, passing memory
+            assistant_message = send_message_stream(current_chat["messages"], response_placeholder, user_memory)
             
             if assistant_message:
                 # Add assistant message to current chat
@@ -273,3 +363,9 @@ else:
                 
                 # Save chat to file
                 save_chat_to_file(current_chat)
+                
+                # Extract traits from user message and update memory
+                extracted_traits = extract_traits(user_input, assistant_message)
+                if extracted_traits:
+                    user_memory.update(extracted_traits)
+                    save_memory(user_memory)

@@ -1,1 +1,20 @@
-{}
+{
+  "name": "John",
+  "age": 30,
+  "location": "New York",
+  "job": "software engineer",
+  "hobby": "reading",
+  "preference": "outdoors",
+  "likes_coffee": true,
+  "dislikes": [
+    "soda"
+  ],
+  "personality_traits": "creative",
+  "interests": "technology",
+  "interests disgust": "",
+  "favourite_color": "",
+  "likes_dislikes": "",
+  "favorite_color": "purple",
+  "language": "Python",
+  "experience_level": "intermediate"
+}
